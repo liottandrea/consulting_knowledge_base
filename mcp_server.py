@@ -77,6 +77,45 @@ def _location_from_file(qmd_file: str) -> str:
     return ref or "wiki"
 
 
+def _strip_frontmatter(text: str) -> str:
+    """Remove a leading YAML frontmatter block (--- … ---)."""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            return text[end + 4:].lstrip("\n")
+    return text
+
+
+def _clean_snippet(snippet: str) -> str:
+    """Fallback cleaner for qmd's diff-style snippet: drop the '@@ … @@' hunk
+    header and any YAML frontmatter lines that leaked into the excerpt."""
+    fm_keys = ("type:", "title:", "created_at:", "updated_at:", "sources:", "tags:",
+               "domain:", "entity_type:", "display_name:", "location:", "relative_path:")
+    out = []
+    for ln in snippet.splitlines():
+        s = ln.strip()
+        if s.startswith("@@") or s == "---" or s.startswith(fm_keys):
+            continue
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
+def _excerpt(rel_path: str, fallback_snippet: str, limit: int = 800) -> str:
+    """Readable excerpt for a result: the page body (frontmatter stripped),
+    truncated on a word boundary. Falls back to the cleaned qmd snippet if the
+    page can't be read."""
+    body = ""
+    try:
+        body = _strip_frontmatter((WIKI_DIR / rel_path).read_text(encoding="utf-8")).strip()
+    except OSError:
+        pass
+    if not body:
+        body = _clean_snippet(fallback_snippet)
+    if len(body) > limit:
+        body = body[:limit].rsplit(" ", 1)[0].rstrip() + " …"
+    return body
+
+
 # --- Core search -------------------------------------------------------------
 def _run_qmd(query: str, top_k: int) -> list[dict]:
     """Invoke qmd and return its parsed JSON result list (raises on failure)."""
@@ -122,12 +161,13 @@ def search(
     out: list[dict] = []
     for r in rows:
         score = r.get("score")
+        loc = _location_from_file(r.get("file", ""))
         out.append({
-            "source": r.get("title") or _location_from_file(r.get("file", "")),
-            "location": _location_from_file(r.get("file", "")),
+            "source": r.get("title") or loc,
+            "location": loc,
             "docid": r.get("docid"),
             "score": round(float(score), 4) if isinstance(score, (int, float)) else None,
-            "text": r.get("snippet") or r.get("text") or "",
+            "text": _excerpt(loc, r.get("snippet") or r.get("text") or ""),
         })
     return out
 
