@@ -75,23 +75,35 @@ qmd mcp --http --daemon --port 8181 >/dev/null 2>&1 || true
 QMD_RERANK=1 uv run python -c "import mcp_server; mcp_server.search('warmup', top_k=1)" \
     >/dev/null 2>&1 && ok "daemon warm on :8181" || warn "daemon warm-up skipped"
 
-# --- 4. Ensure the MCP server is registered with Claude Code -----------------
-say "Claude Code MCP registration"
-if command -v claude >/dev/null 2>&1; then
-    if claude mcp list 2>/dev/null | grep -q "consult-kb"; then
-        ok "consult-kb already registered"
-    else
-        claude mcp add consult-kb -- uv --directory "$REPO" run python mcp_server.py \
-            >/dev/null 2>&1 && ok "registered consult-kb with Claude Code" \
-            || warn "could not auto-register — see HOWTO.md for the manual command"
-    fi
-else
-    warn "claude CLI not found — register manually (see HOWTO.md)"
+# --- 4. Confirm MCP registration (Claude Desktop and/or Claude Code) ---------
+say "MCP registration"
+registered=0
+
+# Claude Desktop: registered via its config file (what most users have).
+DESKTOP_CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+if [ -f "$DESKTOP_CFG" ] && grep -q '"consult-kb"' "$DESKTOP_CFG"; then
+    ok "registered with Claude Desktop"
+    registered=1
 fi
+
+# Claude Code CLI: optional — only if the `claude` binary is available.
+CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+[ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.claude/local/claude" ] && CLAUDE_BIN="$HOME/.claude/local/claude"
+if [ -n "$CLAUDE_BIN" ]; then
+    if "$CLAUDE_BIN" mcp list 2>/dev/null | grep -q "consult-kb"; then
+        ok "registered with Claude Code"
+    else
+        "$CLAUDE_BIN" mcp add consult-kb -- uv --directory "$REPO" run python mcp_server.py \
+            >/dev/null 2>&1 && ok "registered with Claude Code" || true
+    fi
+    registered=1
+fi
+
+[ "$registered" -eq 0 ] && warn "Not registered with any Claude app yet — see HOWTO.md"
 
 echo
 echo "================================================================"
 ok "Ready. Ask Claude, e.g.:  \"search_kb: what is Acme Prism?\""
-echo "   (Claude Code launches the search server automatically.)"
+echo "   (Your Claude app launches the search server automatically.)"
 echo "================================================================"
 pause
