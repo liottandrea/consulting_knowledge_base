@@ -1,0 +1,24 @@
+# Keep the build context small: only pyproject/uv.lock/.python-version + *.py
+# are needed. Everything below is either huge, host-specific, or runtime data.
+.venv/
+.git/
+__pycache__/
+*.pyc
+sources/
+processed/
+vector-store/
+logs/
+hf-cache/
+qmd-cache/
+.cache/
+manifest.json
+manifest.json.pre-namespace.bak
+# LLM-generated wiki (mounted at runtime, not baked into the image)
+wiki/
+# Machine-specific source config (mounted at runtime); keep the example template
+sources.json
+*.md
+plans/
+# ...but the wiki schema IS read at runtime by wiki_ingest.py / mcp_server.py
+!CLAUDE.md
+!AGENTS.md

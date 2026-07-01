@@ -1,0 +1,58 @@
+# macOS
+.DS_Store
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# KB pipeline data (confidential / generated)
+sources/
+processed/
+vector-store/
+logs/
+manifest.json
+manifest.json.pre-namespace.bak
+
+# Local source directory config — paths are machine-specific
+sources.json
+
+# qmd index + downloaded GGUF models (Docker volume)
+qmd-cache/
+
+# LLM-generated wiki content — gitignored by default (keep structure + stubs)
+/wiki/*
+!/wiki/index.md
+!/wiki/log.md
+!/wiki/sources/
+!/wiki/entities/
+!/wiki/concepts/
+!/wiki/engagements/
+!/wiki/synthesis/
+/wiki/sources/*
+!/wiki/sources/.gitkeep
+/wiki/entities/*
+!/wiki/entities/.gitkeep
+/wiki/concepts/*
+!/wiki/concepts/.gitkeep
+/wiki/engagements/*
+!/wiki/engagements/.gitkeep
+/wiki/synthesis/*
+!/wiki/synthesis/.gitkeep
+
+# ML model cache
+.cache/
+hf-cache/
+
+# Corporate CA certs (local only — never commit)
+certs/*.crt
+certs/*.pem
+
+# macOS launcher app (local)
+Start Consulting KB.app/

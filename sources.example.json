@@ -1,0 +1,12 @@
+[
+  {
+    "name": "OneDrive Main",
+    "path": "/Users/yourname/OneDrive/consulting/sources",
+    "recurse": true
+  },
+  {
+    "name": "Local Inbox",
+    "path": "./sources",
+    "recurse": false
+  }
+]

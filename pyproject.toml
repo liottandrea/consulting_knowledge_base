@@ -1,0 +1,17 @@
+[project]
+name = "consult-kb"
+version = "0.1.0"
+description = "Local, MCP-queryable knowledge base pipeline for a consulting practice"
+requires-python = ">=3.12,<3.14"
+# Retrieval runs through qmd (a Node CLI, installed via npm — not a Python dep).
+# Chroma and sentence-transformers were removed when Chroma was retired.
+# transformers stays: ingest.py sizes prose chunks with the BGE-M3 tokenizer.
+dependencies = [
+    "docling>=2.107.0",
+    "mcp>=1.28.1",
+    "numpy>=2.5.0",
+    "onnxruntime>=1.27.0",
+    "pyyaml>=6.0.3",
+    "rapidocr>=3.9.0",
+    "transformers>=5.8.1",
+]

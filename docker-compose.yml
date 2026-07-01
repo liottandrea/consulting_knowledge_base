@@ -1,0 +1,36 @@
+# Single service: the MCP server, which serves qmd hybrid search over the wiki.
+# Chroma has been retired — qmd (a Node CLI) indexes the /wiki markdown directly
+# and stores its index/embeddings under its own cache.
+# Ingest / update / embed and the wiki build run as one-off commands in the same
+# container; they are not long-running services.
+#
+#   docker compose up -d                                    # start mcp-server
+#   docker compose run --rm mcp-server python update_kb.py  # ingest + build wiki
+#   docker compose run --rm mcp-server qmd update && qmd embed  # (re)index the wiki
+#
+# MCP server is reachable at http://localhost:8765/mcp (streamable-http).
+
+services:
+  mcp-server:
+    build: .
+    environment:
+      - MCP_TRANSPORT=streamable-http     # long-lived network transport (not stdio)
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      - KB_MANIFEST=/app/logs/manifest.json  # kept on the mounted logs volume
+      - HF_HOME=/cache/huggingface        # cache the BGE-M3 tokenizer across runs
+      - WIKI_MODEL=qwen3.6:35b            # generative model for wiki synthesis
+      - QMD_INDEX=index
+      - QMD_COLLECTION=wiki
+      - QMD_HOME=/app/.qmd                 # qmd index + model cache on a mounted volume
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - ./sources:/app/sources            # drop source files here (host side)
+      - ./processed:/app/processed        # docling markdown output
+      - ./wiki:/app/wiki                  # LLM-generated wiki (qmd indexes this)
+      - ./sources.json:/app/sources.json  # source-directory config
+      - ./logs:/app/logs                  # JSONL logs + manifest.json
+      - ./hf-cache:/cache/huggingface     # persisted tokenizer weights
+      - ./qmd-cache:/app/.qmd             # persisted qmd index + GGUF models
+    ports:
+      - "8765:8000"                       # MCP at http://localhost:8765/mcp
