@@ -30,8 +30,12 @@ Env:
     QMD_BIN        qmd executable (default: "qmd")
     QMD_INDEX      qmd index name (default: "index")
     QMD_COLLECTION collection to search (default: "wiki")
-    QMD_MODE       "query" (hybrid+rerank, default) | "search" (BM25) | "vsearch"
-    QMD_NO_RERANK  if set, pass --no-rerank (faster, no LLM rerank; CPU-friendly)
+    QMD_MODE       "query" (hybrid, default) | "search" (BM25) | "vsearch" (vector)
+    QMD_RERANK     if set, enable qmd's LLM reranker in query mode. OFF by default:
+                   reranking cold-loads a ~1.3GB model per call (each search spawns
+                   a fresh qmd), which makes the first query hang for tens of
+                   seconds on CPU. Without it, query is hybrid BM25+vector (RRF)
+                   and returns in well under a second.
     WIKI_DIR       wiki directory for kb_info (default: ./wiki)
 """
 
@@ -80,7 +84,9 @@ def _run_qmd(query: str, top_k: int) -> list[dict]:
     cmd = [QMD_BIN, "--index", QMD_INDEX, mode, query,
            "--format", "json", "-n", str(top_k),
            "--collection", QMD_COLLECTION]
-    if mode == "query" and os.environ.get("QMD_NO_RERANK"):
+    # Reranking is opt-in: it cold-loads a large model per call and hangs the
+    # first query on CPU. Default query mode stays hybrid (BM25+vector) and fast.
+    if mode == "query" and not os.environ.get("QMD_RERANK"):
         cmd.append("--no-rerank")
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if proc.returncode != 0:

@@ -16,14 +16,30 @@ MACOS="$APP/Contents/MacOS"
 rm -rf "$APP"
 mkdir -p "$MACOS"
 
-# The bundle executable: resolve the repo (the .app sits in the repo root) and
-# open Terminal running the launch script. Using the app's own location keeps it
-# working no matter where the repo is cloned.
-cat > "$MACOS/launcher" <<'EOF'
-#!/bin/bash
-REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-open -a Terminal "$REPO/scripts/start_kb.sh"
+# The bundle executable asks Terminal (via AppleScript) to open a window and run
+# the launch script. osascript is far more reliable than `open -a Terminal
+# file.sh`, which often opens the script in an editor or does nothing.
+#
+# The repo path is baked in ABSOLUTE at build time, so the .app keeps working
+# after you move it (Desktop, Dock, /Applications) — a relative-to-bundle path
+# would break the moment the app leaves the repo folder.
+{
+    echo '#!/bin/bash'
+    echo "REPO=\"$REPO\""
+    cat <<'EOF'
+SCRIPT="$REPO/scripts/start_kb.sh"
+if [ ! -f "$SCRIPT" ]; then
+    /usr/bin/osascript -e "display alert \"Consulting KB\" message \"Launch script not found at $SCRIPT. Re-run scripts/make_launcher.sh in the repo.\""
+    exit 1
+fi
+/usr/bin/osascript <<OSA
+tell application "Terminal"
+    activate
+    do script "clear; bash \"$SCRIPT\""
+end tell
+OSA
 EOF
+} > "$MACOS/launcher"
 chmod +x "$MACOS/launcher"
 chmod +x "$REPO/scripts/start_kb.sh"
 
