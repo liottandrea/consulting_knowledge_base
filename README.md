@@ -89,6 +89,19 @@ qmd update && qmd embed
 
 Then open the project root in Obsidian to browse the wiki.
 
+## One-click launcher (macOS)
+
+For day-to-day use there's a double-clickable app that refreshes the KB (ingest +
+wiki + search index) and confirms it's ready. Build it once per machine, then
+double-click it whenever you add documents:
+
+```bash
+./scripts/make_launcher.sh        # creates "Start Consulting KB.app"
+```
+
+See **[HOWTO.md](HOWTO.md)** for the plain-English usage guide (setup, daily
+workflow, troubleshooting). The app runs [`scripts/start_kb.sh`](scripts/start_kb.sh).
+
 ## Two-phase update
 
 `update_kb.py` runs both phases in one command:
