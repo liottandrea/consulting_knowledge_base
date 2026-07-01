@@ -43,7 +43,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import time
 from pathlib import Path
 
 from kb_common import ROOT, log_event
@@ -57,6 +59,13 @@ QMD_COLLECTION = os.environ.get("QMD_COLLECTION", "wiki")
 QMD_MODE = os.environ.get("QMD_MODE", "query").lower()
 WIKI_DIR = Path(os.environ.get("WIKI_DIR", ROOT / "wiki"))
 WIKI_INDEX_MD = WIKI_DIR / "index.md"
+
+# Persistent qmd daemon (keeps the embedding/rerank models warm across calls so
+# repeat queries are ~sub-second instead of cold-loading a model each time).
+# The wrapper auto-starts it on first use. Set QMD_NO_DAEMON=1 to force the CLI.
+QMD_DAEMON_PORT = int(os.environ.get("QMD_DAEMON_PORT", "8181"))
+QMD_DAEMON_URL = os.environ.get("QMD_DAEMON_URL", f"http://localhost:{QMD_DAEMON_PORT}/mcp")
+USE_DAEMON = not os.environ.get("QMD_NO_DAEMON")
 
 
 # --- Citation / location -----------------------------------------------------
@@ -116,15 +125,68 @@ def _excerpt(rel_path: str, fallback_snippet: str, limit: int = 800) -> str:
     return body
 
 
-# --- Core search -------------------------------------------------------------
-def _run_qmd(query: str, top_k: int) -> list[dict]:
-    """Invoke qmd and return its parsed JSON result list (raises on failure)."""
+# --- qmd invocation: daemon (warm) with CLI fallback -------------------------
+_DAEMON_ROW = re.compile(r"^#(\S+)\s+(\d+)%\s+(.+?)\s+-\s+(.+)$")
+
+
+def _parse_daemon_text(text: str) -> list[dict]:
+    """Parse the qmd daemon's query output lines: '#docid 93% path - Title'."""
+    rows: list[dict] = []
+    for ln in text.splitlines():
+        m = _DAEMON_ROW.match(ln.strip())
+        if m:
+            docid, pct, path, title = m.groups()
+            rows.append({"docid": "#" + docid, "score": int(pct) / 100.0,
+                         "file": path, "title": title, "snippet": ""})
+    return rows
+
+
+def _daemon_query(query: str, top_k: int) -> str:
+    """Call the running qmd daemon's `query` MCP tool; return its text output."""
+    import asyncio
+
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    rerank = bool(os.environ.get("QMD_RERANK"))
+
+    async def _call() -> str:
+        async with streamablehttp_client(QMD_DAEMON_URL) as (r, w, _):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                res = await s.call_tool("query", {
+                    "searches": [{"type": "vec", "query": query},
+                                 {"type": "lex", "query": query}],
+                    "collections": [QMD_COLLECTION],
+                    "limit": top_k,
+                    "rerank": rerank,
+                })
+                return "".join(getattr(c, "text", "") for c in res.content)
+
+    return asyncio.run(_call())
+
+
+def _start_daemon() -> None:
+    """Start the qmd daemon (idempotent) and give it a moment to bind."""
+    subprocess.run([QMD_BIN, "mcp", "--http", "--daemon", "--port", str(QMD_DAEMON_PORT)],
+                   capture_output=True, text=True, timeout=30)
+    time.sleep(3)
+
+
+def _run_qmd_daemon(query: str, top_k: int) -> list[dict]:
+    try:
+        return _parse_daemon_text(_daemon_query(query, top_k))
+    except Exception:
+        _start_daemon()  # not running yet — start it and retry once
+        return _parse_daemon_text(_daemon_query(query, top_k))
+
+
+def _run_qmd_cli(query: str, top_k: int) -> list[dict]:
+    """Fallback: invoke the qmd CLI and parse its JSON output."""
     mode = QMD_MODE if QMD_MODE in ("query", "search", "vsearch") else "query"
     cmd = [QMD_BIN, "--index", QMD_INDEX, mode, query,
            "--format", "json", "-n", str(top_k),
            "--collection", QMD_COLLECTION]
-    # Reranking is opt-in: it cold-loads a large model per call and hangs the
-    # first query on CPU. Default query mode stays hybrid (BM25+vector) and fast.
     if mode == "query" and not os.environ.get("QMD_RERANK"):
         cmd.append("--no-rerank")
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -133,9 +195,17 @@ def _run_qmd(query: str, top_k: int) -> list[dict]:
             f"qmd exited {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}"
         )
     out = proc.stdout.strip()
-    if not out:
-        return []
-    return json.loads(out)
+    return json.loads(out) if out else []
+
+
+def _run_qmd(query: str, top_k: int) -> list[dict]:
+    """Return ranked results, preferring the warm daemon, falling back to the CLI."""
+    if USE_DAEMON:
+        try:
+            return _run_qmd_daemon(query, top_k)
+        except Exception as exc:
+            log_event({"stage": "mcp", "event": "daemon_fallback", "reason": repr(exc)})
+    return _run_qmd_cli(query, top_k)
 
 
 def search(

@@ -67,6 +67,14 @@ fi
 qmd update >/dev/null 2>&1 && ok "index updated"
 qmd embed  2>&1 | grep -viE "^⏵|Downloading|Gathering|^\[2K" | tail -1
 
+# --- 3b. Warm the search daemon (keeps models resident for fast queries) -----
+say "Warming the search daemon"
+qmd mcp --http --daemon --port 8181 >/dev/null 2>&1 || true
+# One query through the wrapper loads the models into the daemon so the first
+# real question from Claude is already fast (not a cold model load).
+QMD_RERANK=1 uv run python -c "import mcp_server; mcp_server.search('warmup', top_k=1)" \
+    >/dev/null 2>&1 && ok "daemon warm on :8181" || warn "daemon warm-up skipped"
+
 # --- 4. Ensure the MCP server is registered with Claude Code -----------------
 say "Claude Code MCP registration"
 if command -v claude >/dev/null 2>&1; then

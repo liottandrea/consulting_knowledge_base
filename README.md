@@ -212,7 +212,9 @@ wiki, `sources.json`, and the qmd index/models are mounted from the host.
 | `WIKI_MODEL` | `qwen3.6:35b` | Ollama model for wiki synthesis. |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL. |
 | `QMD_MODE` | `query` | `query` (hybrid) / `search` (BM25) / `vsearch` (vector). |
-| `QMD_RERANK` | _(unset)_ | Enable qmd's LLM reranker in `query` mode. Off by default — it cold-loads a ~1.3GB model per call and hangs the first query on CPU. |
+| `QMD_RERANK` | _(unset)_ | Enable qmd's LLM reranker for better ordering. With the daemon (below) the model stays warm, so repeat queries stay ~sub-2s. |
+| `QMD_NO_DAEMON` | _(unset)_ | Force the qmd CLI per call instead of the warm daemon. By default the server auto-starts a `qmd mcp --http --daemon` on `:8181` and queries it, so models stay resident across calls. |
+| `QMD_DAEMON_PORT` | `8181` | Port for the persistent qmd daemon. |
 | `QMD_INDEX` / `QMD_COLLECTION` | `index` / `wiki` | qmd index + collection to search. |
 | `WIKI_DIR` | `./wiki` | Wiki directory (used by `kb_info`). |
 | `KB_MANIFEST` | `./manifest.json` | Manifest path (Docker keeps it under `logs/`). |
