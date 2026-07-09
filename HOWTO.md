@@ -80,6 +80,21 @@ uv run python manage_sources.py add --name "OneDrive Main" --path "/Users/you/On
 uv run python manage_sources.py check                       # verify + count documents
 ```
 
+### Loading a lot of documents at once
+
+For a big first load (a whole OneDrive folder), the app's one-click refresh can
+take many hours. Instead use the resumable backfill — it does one document at a
+time and can be stopped/restarted safely:
+
+```bash
+# try a couple of folders first, review the wiki in Obsidian, then do the rest
+uv run python scripts/populate_kb.py --filter "OneDrive Projects/acme-corp,OneDrive Projects/globex"
+uv run python scripts/populate_kb.py            # everything (leave it running / overnight)
+```
+
+If it stops (or you close the laptop), just run the same command again — it picks
+up where it left off. When it's done, double-click the app once to refresh search.
+
 ---
 
 ## Troubleshooting

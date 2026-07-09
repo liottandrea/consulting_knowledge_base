@@ -138,6 +138,24 @@ Each `sources.json` entry: `name` (label used in citations), `path` (absolute or
 repo-relative), `recurse` (walk subdirectories). Missing dirs are skipped with a
 logged warning — a OneDrive folder need not be synced on every machine.
 
+## Bulk backfill (large corpora)
+
+`update_kb.py` runs ingest + wiki in one pass — fine for a few new files. For a
+large backfill (hundreds of documents, hours of local synthesis) use the
+**resumable** driver, which processes one file at a time and commits after each,
+so it survives interruptions and skips already-done files on re-run:
+
+```bash
+# preview what would run (change nothing)
+uv run python scripts/populate_kb.py --filter "OneDrive Projects/globex" --dry-run
+# pilot a couple of folders first, review the wiki, then run the full backfill
+uv run python scripts/populate_kb.py --filter "OneDrive Projects/acme-corp,OneDrive Projects/globex"
+uv run python scripts/populate_kb.py            # everything (resumable; run overnight)
+```
+
+`--limit N` caps a run; `--model` overrides `WIKI_MODEL`. After it finishes,
+refresh search with `qmd update && qmd embed` (or just run the launcher).
+
 ## Lint
 
 ```bash

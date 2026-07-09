@@ -87,12 +87,20 @@ def _location_from_file(qmd_file: str) -> str:
 
 
 def _strip_frontmatter(text: str) -> str:
-    """Remove a leading YAML frontmatter block (--- … ---)."""
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
+    """Remove a leading YAML frontmatter block. Handles the well-formed case
+    (--- … ---) and LLM-malformed pages that omit the opening fence but still
+    close with a '---' line — cut through the first standalone '---' within the
+    opening lines so frontmatter never leaks into an excerpt."""
+    t = text.lstrip("\n")
+    if t.startswith("---"):
+        end = t.find("\n---", 3)
         if end != -1:
-            return text[end + 4:].lstrip("\n")
-    return text
+            return t[end + 4:].lstrip("\n")
+    lines = t.splitlines()
+    for i, ln in enumerate(lines[:30]):
+        if i > 0 and ln.strip() == "---":
+            return "\n".join(lines[i + 1:]).lstrip("\n")
+    return t
 
 
 def _clean_snippet(snippet: str) -> str:
@@ -226,12 +234,16 @@ def search(
     callers do not break.
     """
     top_k = max(1, min(int(top_k), MAX_TOP_K))
-    rows = _run_qmd(query, top_k)
+    # Over-fetch a little so filtering out index.md/log.md still yields top_k.
+    rows = _run_qmd(query, min(top_k + 2, MAX_TOP_K))
 
     out: list[dict] = []
     for r in rows:
         score = r.get("score")
         loc = _location_from_file(r.get("file", ""))
+        # The wiki catalogue and operations log are navigation aids, not content.
+        if loc in ("index.md", "log.md"):
+            continue
         out.append({
             "source": r.get("title") or loc,
             "location": loc,
@@ -239,7 +251,7 @@ def search(
             "score": round(float(score), 4) if isinstance(score, (int, float)) else None,
             "text": _excerpt(loc, r.get("snippet") or r.get("text") or ""),
         })
-    return out
+    return out[:top_k]
 
 
 def _format_results(query: str, results: list[dict], where_desc: str) -> str:
