@@ -30,6 +30,7 @@ qmd-cache/
 /wiki/*
 !/wiki/index.md
 !/wiki/log.md
+!/wiki/Home.md
 !/wiki/sources/
 !/wiki/entities/
 !/wiki/concepts/
