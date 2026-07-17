@@ -89,13 +89,14 @@ _TASK = """You are integrating the SOURCE DOCUMENT below into the wiki, followin
 schema in the system prompt exactly.
 
 Steps:
-1. Identify which existing wiki pages (from the CURRENT WIKI INDEX) this source
+1. Identify which existing wiki pages (from EXISTING WIKI PAGES) this source
    touches; update them to integrate the new knowledge, noting contradictions
    with dated notes rather than overwriting.
 2. Create new entity / concept / engagement / source pages as needed, each with
    complete YAML frontmatter per the schema.
-3. Update wiki/index.md to list any new pages.
-4. Add one line to append to wiki/log.md describing this ingest.
+3. Add one line to append to wiki/log.md describing this ingest.
+
+Do NOT write wiki/index.md — the catalogue is generated automatically.
 
 Cite the source ONLY by its display_name and location as PLAIN TEXT, e.g.
 "{display} ({location})". Do NOT wrap a citation in [[ ]]. NEVER write a raw
@@ -116,13 +117,82 @@ Every write path MUST start with "wiki/". Provide the FULL intended content of
 each file you write (you are replacing the file)."""
 
 
+# Wiki page groups: (folder, index heading, frontmatter qualifier field).
+_INDEX_SECTIONS = [
+    ("entities", "Entities", "entity_type"),
+    ("concepts", "Concepts", "domain"),
+    ("engagements", "Engagements", None),
+    ("sources", "Sources", "location"),
+    ("synthesis", "Synthesis", None),
+]
+
+
+def _page_meta(p: Path) -> dict:
+    """Frontmatter of a wiki page (reuses the processed-md parser; wiki pages have
+    no chunk markers, so only the frontmatter comes back)."""
+    try:
+        fm, _ = parse_processed(p)
+        return fm or {}
+    except Exception:
+        return {}
+
+
+def _existing_pages_digest(limit: int = 20000) -> str:
+    """Compact list of existing pages (slug + title + qualifier) grouped by type.
+
+    Sent to the model in place of the full index.md so it knows what to update /
+    link to — WITHOUT the whole catalogue ballooning the prompt as the wiki grows
+    (the root cause of truncated, invalid-JSON replies on large backfills)."""
+    lines: list[str] = []
+    for folder, heading, qual in _INDEX_SECTIONS:
+        d = WIKI_DIR / folder
+        pages = sorted(d.glob("*.md")) if d.exists() else []
+        if not pages:
+            continue
+        lines.append(f"{heading}:")
+        for p in pages:
+            fm = _page_meta(p)
+            title = fm.get("title") or p.stem
+            q = fm.get(qual) if qual else None
+            lines.append(f"  [[{p.stem}]] {title}" + (f" ({q})" if q else ""))
+    text = "\n".join(lines)
+    if len(text) > limit:
+        text = text[:limit] + "\n… (list truncated)"
+    return text or "(no pages yet)"
+
+
+def _rebuild_index() -> None:
+    """Regenerate wiki/index.md deterministically from page frontmatter.
+
+    The index is derived, not LLM-authored — so it is always complete and the
+    model never has to rewrite the whole catalogue (which grew unbounded and
+    caused truncation failures)."""
+    parts = ["---", "type: index", "title: Wiki Index",
+             f"updated_at: {utc_now_iso()}", "---", "",
+             "# Wiki Index", "",
+             "Catalogue of every wiki page (auto-generated on each ingest).", ""]
+    for folder, heading, qual in _INDEX_SECTIONS:
+        parts.append(f"## {heading}")
+        parts.append("")
+        d = WIKI_DIR / folder
+        rows = []
+        for p in (sorted(d.glob("*.md")) if d.exists() else []):
+            fm = _page_meta(p)
+            title = fm.get("title") or p.stem
+            q = fm.get(qual) if qual else None
+            rows.append(f"- [[{p.stem}]] — {title}" + (f" ({q})" if q else ""))
+        parts += rows or ["_none yet_"]
+        parts.append("")
+    WIKI_INDEX_MD.write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
+
+
 def _build_messages(fm: dict, chunks: list) -> list[dict]:
     schema = SCHEMA_FILE.read_text(encoding="utf-8")
-    index_md = WIKI_INDEX_MD.read_text(encoding="utf-8") if WIKI_INDEX_MD.exists() else "(empty)"
     task = _TASK.format(display=fm.get("display_name") or "(document)",
                         location=fm.get("location") or "Local")
     user = (f"{_build_source_text(fm, chunks)}\n\n"
-            f"===== CURRENT WIKI INDEX (wiki/index.md) =====\n{index_md}\n\n"
+            f"===== EXISTING WIKI PAGES (update these or link to them) =====\n"
+            f"{_existing_pages_digest()}\n\n"
             f"===== TASK =====\n{task}")
     return [{"role": "system", "content": schema},
             {"role": "user", "content": user}]
@@ -135,12 +205,15 @@ def _call_ollama(messages: list[dict], model: str) -> str:
         "messages": messages,
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0.2},
+        # num_ctx/num_predict sized generously so a large source doc + schema
+        # don't overflow the default context and truncate the reply into invalid
+        # JSON. qwen3.6:35b supports a large context window.
+        "options": {"temperature": 0.2, "num_ctx": 32768, "num_predict": 8192},
     }).encode("utf-8")
     req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=payload,
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with urllib.request.urlopen(req, timeout=900) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as exc:
         raise OllamaUnreachable(
@@ -201,6 +274,9 @@ def _apply(result: dict) -> dict:
     appends = list(result.get("appends") or [])
     written = updated = rejected = 0
     rejections: list[str] = []
+
+    # index.md is auto-generated (_rebuild_index) — ignore any model write to it.
+    writes = [w for w in writes if Path(w.get("path", "")).name != "index.md"]
 
     # log.md is append-only by design. Models sometimes classify the log line as
     # a "write" (a full replacement), which the truncation guard would reject and
@@ -263,19 +339,27 @@ def ingest_to_wiki(processed_md_path, dry_run: bool = False,
                 "error": "no chunks in processed markdown"}
 
     messages = _build_messages(fm, chunks)
-    try:
-        raw = _call_ollama(messages, model)
-    except OllamaUnreachable as exc:
-        return {"pages_written": 0, "pages_updated": 0, "rejections": 0,
-                "error": str(exc)}
-
-    try:
-        result = _extract_json(raw)
-    except (ValueError, json.JSONDecodeError) as exc:
+    # Regenerate a few times: malformed JSON from a local model is often transient.
+    result = None
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw = _call_ollama(messages, model)
+        except OllamaUnreachable as exc:
+            return {"pages_written": 0, "pages_updated": 0, "rejections": 0,
+                    "error": str(exc)}
+        try:
+            result = _extract_json(raw)
+            break
+        except (ValueError, json.JSONDecodeError) as exc:
+            last_err = exc
+            log_event({"stage": "wiki", "event": "retry", "source": display,
+                       "attempt": attempt + 1, "reason": str(exc)})
+    if result is None:
         log_event({"stage": "wiki", "event": "failed", "source": display,
-                   "reason": f"bad JSON from model: {exc}"})
+                   "reason": f"bad JSON from model after 3 attempts: {last_err}"})
         return {"pages_written": 0, "pages_updated": 0, "rejections": 0,
-                "error": f"model did not return valid JSON: {exc}"}
+                "error": f"model did not return valid JSON: {last_err}"}
 
     if dry_run:
         print(f"\n[dry-run] planned wiki writes for {display}:")
@@ -291,6 +375,7 @@ def ingest_to_wiki(processed_md_path, dry_run: bool = False,
                 "error": None}
 
     applied = _apply(result)
+    _rebuild_index()  # keep the catalogue complete + in sync, deterministically
     log_event({"stage": "wiki", "event": "ingested", "source": display,
                "location": fm.get("location"),
                "pages_written": applied["pages_written"],
