@@ -53,7 +53,20 @@ _CONTRADICTION_RE = re.compile(r"supersed|contradict|revis|no longer|replaced by
 
 
 class OllamaUnreachable(RuntimeError):
-    pass
+    """Ollama is genuinely down (connection refused) — stop the whole batch."""
+
+
+class OllamaError(RuntimeError):
+    """Ollama is up but errored on THIS request (e.g. HTTP 500 from memory
+    pressure on a large doc). Retryable per-file; must not stop the batch."""
+
+
+# Context sizing for the wiki-synthesis call. num_ctx too large OOMs the model on
+# smaller machines (→ HTTP 500); too small truncates the reply into invalid JSON.
+# The slim page-digest prompt keeps input modest, so a moderate default works.
+# Tune with WIKI_NUM_CTX / WIKI_NUM_PREDICT if you see 500s (lower) or truncation.
+NUM_CTX = int(os.environ.get("WIKI_NUM_CTX", "16384"))
+NUM_PREDICT = int(os.environ.get("WIKI_NUM_PREDICT", "6144"))
 
 
 # --- Prompt assembly ---------------------------------------------------------
@@ -205,16 +218,17 @@ def _call_ollama(messages: list[dict], model: str) -> str:
         "messages": messages,
         "stream": False,
         "format": "json",
-        # num_ctx/num_predict sized generously so a large source doc + schema
-        # don't overflow the default context and truncate the reply into invalid
-        # JSON. qwen3.6:35b supports a large context window.
-        "options": {"temperature": 0.2, "num_ctx": 32768, "num_predict": 8192},
+        "options": {"temperature": 0.2, "num_ctx": NUM_CTX, "num_predict": NUM_PREDICT},
     }).encode("utf-8")
     req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=payload,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=900) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Reachable but errored on this request (commonly a 500 from memory
+        # pressure on a big doc). Retryable per-file — do NOT stop the batch.
+        raise OllamaError(f"Ollama HTTP {exc.code} on this document ({exc})") from exc
     except urllib.error.URLError as exc:
         raise OllamaUnreachable(
             f"Ollama not reachable at {OLLAMA_URL}. Run `ollama serve` to start "
@@ -346,8 +360,15 @@ def ingest_to_wiki(processed_md_path, dry_run: bool = False,
         try:
             raw = _call_ollama(messages, model)
         except OllamaUnreachable as exc:
+            # Genuinely down — surface "not reachable" so the batch stops.
             return {"pages_written": 0, "pages_updated": 0, "rejections": 0,
                     "error": str(exc)}
+        except OllamaError as exc:
+            # Server error on this doc (e.g. 500) — retry, then fail just this file.
+            last_err = exc
+            log_event({"stage": "wiki", "event": "retry", "source": display,
+                       "attempt": attempt + 1, "reason": str(exc)})
+            continue
         try:
             result = _extract_json(raw)
             break

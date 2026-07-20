@@ -164,11 +164,20 @@ def main(argv: list[str]) -> int:
         elif res["status"] == "skipped":
             counts["skipped"] += 1
             print(f"    - skipped ({res['reason']})", flush=True)
+        elif "no chunks" in res.get("reason", ""):
+            # Image-only / empty doc — nothing to synthesise. Mark done so it is
+            # not retried on every subsequent run.
+            counts["skipped"] += 1
+            done.add(key)
+            _save_done(done)
+            print("    - skipped (no extractable text)", flush=True)
         else:
             counts["failed"] += 1
             log_event({"stage": "populate", "event": "failed", "key": key, "reason": res["reason"]})
             print(f"    ✗ {res['reason']}", flush=True)
-            # Ollama down → stop early; nothing more will succeed this run.
+            # Ollama genuinely down → stop early; nothing more will succeed.
+            # (A per-document HTTP 500 no longer reaches here — wiki_ingest retries
+            # it and returns an ordinary failure, so the batch keeps going.)
             if "not reachable" in res["reason"].lower():
                 print("\nOllama unreachable — stopping. Start it and re-run to resume.")
                 break
