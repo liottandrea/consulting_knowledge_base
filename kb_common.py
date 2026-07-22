@@ -62,7 +62,7 @@ def _fallback_source_dirs() -> list[dict[str, Any]]:
     Keeps the pipeline working on a fresh clone with no config — points at
     ROOT/sources, non-recursive, labelled "Local".
     """
-    return [{"name": "Local", "path": str(SOURCES_DIR), "recurse": False}]
+    return [{"name": "Local", "path": str(SOURCES_DIR), "recurse": False, "exclude": []}]
 
 
 def load_source_dirs() -> list[dict[str, Any]]:
@@ -73,6 +73,8 @@ def load_source_dirs() -> list[dict[str, Any]]:
       * ``path``    — absolute path. Relative paths in the config are resolved
                       against ROOT so the same config works from any CWD.
       * ``recurse`` — walk subdirectories recursively when True (default False).
+      * ``exclude`` — optional list of filename glob patterns (e.g. "*copy*",
+                      "*(1)*") to skip within this source root.
 
     Falls back to a single ROOT/sources entry if the file is missing. A malformed
     file logs a warning and also falls back, rather than crashing the pipeline.
@@ -101,6 +103,8 @@ def load_source_dirs() -> list[dict[str, Any]]:
         path = Path(entry["path"])
         if not path.is_absolute():
             path = (ROOT / path).resolve()
+        exclude = entry.get("exclude") or []
         out.append({"name": entry["name"], "path": str(path),
-                    "recurse": bool(entry.get("recurse", False))})
+                    "recurse": bool(entry.get("recurse", False)),
+                    "exclude": [str(pat) for pat in exclude] if isinstance(exclude, list) else []})
     return out or _fallback_source_dirs()

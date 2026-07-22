@@ -33,6 +33,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import yaml
+
+import wiki_ontology
 from embed import parse_processed
 from kb_common import ROOT, log_event, utc_now_iso
 
@@ -193,7 +196,9 @@ def _rebuild_index() -> None:
             fm = _page_meta(p)
             title = fm.get("title") or p.stem
             q = fm.get(qual) if qual else None
-            rows.append(f"- [[{p.stem}]] — {title}" + (f" ({q})" if q else ""))
+            cat = fm.get("category")
+            suffix = " ".join(f"({v})" for v in (q, cat) if v)
+            rows.append(f"- [[{p.stem}]] — {title}" + (f" {suffix}" if suffix else ""))
         parts += rows or ["_none yet_"]
         parts.append("")
     WIKI_INDEX_MD.write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
@@ -236,6 +241,64 @@ def _call_ollama(messages: list[dict], model: str) -> str:
             f"({exc})"
         ) from exc
     return (data.get("message") or {}).get("content", "")
+
+
+# --- Ontology enforcement -----------------------------------------------------
+def _folder_of(path_str: str) -> str | None:
+    """The wiki/<folder>/ a write path lives in, or None if not page content
+    (e.g. wiki/log.md, wiki/index.md, wiki/Home.md)."""
+    parts = Path(path_str).parts
+    if len(parts) >= 3 and parts[0] == "wiki" and parts[1] in {
+        f for f, _, _ in _INDEX_SECTIONS
+    }:
+        return parts[1]
+    return None
+
+
+def _known_slugs() -> set[str]:
+    """Stems of every existing wiki content page, across all sections."""
+    slugs: set[str] = set()
+    for folder, _, _ in _INDEX_SECTIONS:
+        d = WIKI_DIR / folder
+        if d.exists():
+            slugs.update(p.stem.lower() for p in d.glob("*.md"))
+    return slugs
+
+
+def _normalize_write(path_str: str, content: str) -> tuple[str, list[str]]:
+    """Coerce a write's frontmatter to the controlled vocab. Returns
+    (normalized content, notes) — notes are human-review flags for values that
+    had to be defaulted (see wiki_ontology.normalize_page_frontmatter)."""
+    folder = _folder_of(path_str)
+    if folder is None:
+        return content, []
+    fm, body = wiki_ontology.split_frontmatter(content)
+    if not fm:
+        return content, []
+    fm, notes = wiki_ontology.normalize_page_frontmatter(fm, Path(path_str).stem, folder)
+    fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).strip()
+    return f"---\n{fm_yaml}\n---\n\n{body.strip()}\n", notes
+
+
+def _resolve_links(writes: list[dict]) -> None:
+    """Rewrite any [[slug]] wikilink / relation target that doesn't resolve to
+    an existing page (or a page in this same batch) into plain text — enforces
+    CLAUDE.md's link-only-if-exists rule. Mutates `writes` in place."""
+    known = _known_slugs()
+    known.update(Path(w.get("path", "")).stem.lower() for w in writes
+                if _folder_of(w.get("path", "")) is not None)
+    for w in writes:
+        folder = _folder_of(w.get("path", ""))
+        if folder is None:
+            continue
+        fm, body = wiki_ontology.split_frontmatter(w.get("content", ""))
+        if not fm:
+            continue
+        body = wiki_ontology.rewrite_unresolved_links(body, known)
+        if "relations" in fm:
+            fm["relations"] = wiki_ontology.filter_relations(fm.get("relations"), known)
+        fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).strip()
+        w["content"] = f"---\n{fm_yaml}\n---\n\n{body.strip()}\n"
 
 
 # --- Response validation -----------------------------------------------------
@@ -299,6 +362,18 @@ def _apply(result: dict) -> dict:
         if _is_log(w.get("path", "")):
             appends.append({"path": w["path"], "line": w.get("content", "")})
             writes.remove(w)
+
+    # Ontology enforcement: coerce vocab fields, then resolve/prune links and
+    # relations against the known page set (existing pages + this batch).
+    review_notes: list[str] = []
+    for w in writes:
+        content, notes = _normalize_write(w.get("path", ""), w.get("content", ""))
+        w["content"] = content
+        review_notes.extend(notes)
+    _resolve_links(writes)
+    for note in review_notes:
+        appends.append({"path": "wiki/log.md",
+                        "line": f"{utc_now_iso()} [needs-review] {note}"})
 
     for w in writes:
         path_str, content = w.get("path", ""), w.get("content", "")

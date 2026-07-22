@@ -1,6 +1,8 @@
 ---
 type: dashboard
 title: Home
+updated_at: '2026-07-20T08:59:50.656928+00:00'
+sources: []
 ---
 
 # 🏠 Consulting KB — Home

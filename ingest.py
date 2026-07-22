@@ -24,6 +24,7 @@ changed files.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import sys
 import traceback
@@ -832,9 +833,10 @@ def _iter_sources(args: list[str]) -> list[tuple[Path, dict]]:
                        "warning": f"source dir not found (skipped): {entry['name']} "
                                   f"-> {root}"})
             continue
+        excludes = entry.get("exclude") or []
         walker = root.rglob("*") if entry.get("recurse") else root.iterdir()
         for p in sorted(walker):
-            if _is_supported(p):
+            if _is_supported(p) and not any(fnmatch.fnmatch(p.name, pat) for pat in excludes):
                 out.append((p, entry))
     return out
 

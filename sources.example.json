@@ -2,7 +2,8 @@
   {
     "name": "OneDrive Main",
     "path": "/Users/yourname/OneDrive/consulting/sources",
-    "recurse": true
+    "recurse": true,
+    "exclude": ["*copy*", "*(1)*", "*(1)(1)*", "*_1.*"]
   },
   {
     "name": "Local Inbox",

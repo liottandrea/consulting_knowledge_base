@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 
+import wiki_ontology
 from kb_common import ROOT, log_event, utc_now_iso
 
 WIKI_DIR = ROOT / "wiki"
@@ -34,24 +35,12 @@ WIKI_INDEX_MD = WIKI_DIR / "index.md"
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]")
 _RAW_PATH_RE = re.compile(r"(/Users/|/home/|[A-Za-z]:\\|OneDrive/\S)")
 _REQUIRED_FM = ("type", "title", "updated_at", "sources")
-_SKIP = {"index.md", "log.md"}
+_SKIP = {"index.md", "log.md", "Home.md"}
 
 
 def _pages() -> list[Path]:
     """All wiki content pages (excludes index.md and log.md)."""
     return sorted(p for p in WIKI_DIR.rglob("*.md") if p.name not in _SKIP)
-
-
-def _read_frontmatter(p: Path) -> tuple[dict, str]:
-    text = p.read_text(encoding="utf-8")
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            try:
-                return (yaml.safe_load(text[3:end]) or {}), text[end + 4:]
-            except yaml.YAMLError:
-                return {}, text
-    return {}, text
 
 
 def _slug(name: str) -> str:
@@ -71,15 +60,23 @@ def lint() -> dict:
     path_leaks: list[str] = []
     orphans: list[str] = []
     stale: list[tuple[str, str]] = []
+    vocab_violations: list[tuple[str, str]] = []   # (page, "field='value' not in vocab")
+    unresolved_relations: list[tuple[str, str]] = []  # (page, "relation -> target")
+    baked_qualifier: list[tuple[str, str]] = []    # (page, "title" -> "normalized")
+    title_map: dict[str, list[str]] = {}
+    alias_map: dict[str, list[str]] = {}
 
     log_text = WIKI_LOG_MD.read_text(encoding="utf-8") if WIKI_LOG_MD.exists() else ""
 
     for p in pages:
-        fm, body = _read_frontmatter(p)
+        fm, body = wiki_ontology.read_page(p)
         rel = p.relative_to(WIKI_DIR).as_posix()
+        folder = p.relative_to(WIKI_DIR).parts[0]
+        slug = p.stem
 
-        # Missing frontmatter fields
-        miss = [k for k in _REQUIRED_FM if not fm.get(k)]
+        # Missing frontmatter fields (key absent entirely -- an empty "sources: []"
+        # is present-but-uncited, not missing, so don't flag it every run).
+        miss = [k for k in _REQUIRED_FM if k not in fm or fm.get(k) in (None, "")]
         if miss:
             missing_fm.append((rel, miss))
 
@@ -108,12 +105,60 @@ def lint() -> dict:
                         stale.append((rel, f"log entry {dm.group(0)} > updated_at {updated[:10]}"))
                         break
 
+        # Controlled-vocabulary compliance
+        if folder == "entities" and fm.get("entity_type") is not None:
+            if wiki_ontology.coerce_entity_type(fm["entity_type"]) != str(fm["entity_type"]).strip().lower():
+                vocab_violations.append((rel, f"entity_type='{fm['entity_type']}'"))
+        if folder == "concepts" and fm.get("domain") is not None:
+            if wiki_ontology.coerce_domain(fm["domain"]) != str(fm["domain"]).strip().lower():
+                vocab_violations.append((rel, f"domain='{fm['domain']}'"))
+        if fm.get("category") is not None:
+            if str(fm["category"]).strip().lower() not in wiki_ontology.CATEGORIES:
+                vocab_violations.append((rel, f"category='{fm['category']}'"))
+        for t in (fm.get("tags") or []):
+            s = str(t).strip().lower().replace(" ", "-")
+            if wiki_ontology.TAG_SYNONYMS.get(s, s) not in wiki_ontology.TAGS:
+                vocab_violations.append((rel, f"tag='{t}'"))
+
+        # Relations: valid key + resolvable target
+        for r in (fm.get("relations") or []):
+            if not (isinstance(r, dict) and len(r) == 1):
+                unresolved_relations.append((rel, f"malformed relation entry: {r!r}"))
+                continue
+            key, target = next(iter(r.items()))
+            if key not in wiki_ontology.RELATIONS:
+                unresolved_relations.append((rel, f"unknown relation type '{key}'"))
+                continue
+            tgt = wiki_ontology.relation_target_slug(target)
+            if not tgt or tgt not in by_slug:
+                unresolved_relations.append((rel, f"{key} -> {target!r}"))
+
+        # Baked-qualifier titles
+        normalized = wiki_ontology.normalize_title(fm.get("title"), slug)
+        if fm.get("title") and normalized != str(fm["title"]).strip():
+            baked_qualifier.append((rel, f"'{fm['title']}' -> '{normalized}'"))
+
+        # Duplicate titles / aliases
+        if title:
+            title_map.setdefault(title.strip().lower(), []).append(rel)
+        for alias in (fm.get("aliases") or []):
+            alias_map.setdefault(str(alias).strip().lower(), []).append(rel)
+
     for p, n in inbound.items():
         if n == 0:
             orphans.append(p.relative_to(WIKI_DIR).as_posix())
 
+    duplicates = [(t, pages_) for t, pages_ in title_map.items() if len(pages_) > 1]
+    for alias, pages_ in alias_map.items():
+        if alias in title_map:
+            duplicates.append((f"'{alias}' both a title and an alias",
+                              sorted(set(pages_ + title_map[alias]))))
+
     return {"pages": len(pages), "orphans": orphans, "broken": broken,
             "missing_fm": missing_fm, "path_leaks": path_leaks, "stale": stale,
+            "vocab_violations": vocab_violations,
+            "unresolved_relations": unresolved_relations,
+            "baked_qualifier": baked_qualifier, "duplicates": duplicates,
             "by_slug": by_slug, "broken_targets": sorted({t for _, t in broken})}
 
 
@@ -137,6 +182,18 @@ def _print_report(r: dict) -> None:
     print(f"  stale pages   : {len(r['stale'])}")
     for rel, why in r["stale"]:
         print(f"     • {rel}: {why}")
+    print(f"  vocab violations: {len(r['vocab_violations'])}")
+    for rel, why in r["vocab_violations"]:
+        print(f"     • {rel}: {why}")
+    print(f"  unresolved relations: {len(r['unresolved_relations'])}")
+    for rel, why in r["unresolved_relations"]:
+        print(f"     • {rel}: {why}")
+    print(f"  baked-qualifier titles: {len(r['baked_qualifier'])}")
+    for rel, why in r["baked_qualifier"]:
+        print(f"     • {rel}: {why}")
+    print(f"  duplicate titles/aliases: {len(r['duplicates'])}")
+    for title, pages_ in r["duplicates"]:
+        print(f"     • {title}: {', '.join(pages_)}")
     print("=" * 60)
 
 
@@ -164,12 +221,24 @@ def _fix(r: dict) -> list[str]:
                     "sources": []}
     for rel, miss in r["missing_fm"]:
         p = WIKI_DIR / rel
-        fm, body = _read_frontmatter(p)
+        fm, body = wiki_ontology.read_page(p)
         for k in miss:
             fm.setdefault(k, p.stem if k == "title" else placeholders.get(k))
-        new = "---\n" + yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).strip() + "\n---" + body
-        p.write_text(new, encoding="utf-8")
+        wiki_ontology.write_page(p, fm, body)
         applied.append(f"added frontmatter {miss} to {rel}")
+
+    # Vocab/title/tag coercion (safe: defaults + drops, no merges/deletes).
+    for p in _pages():
+        folder = p.relative_to(WIKI_DIR).parts[0]
+        fm, body = wiki_ontology.read_page(p)
+        if not fm:
+            continue
+        new_fm, notes = wiki_ontology.normalize_page_frontmatter(fm, p.stem, folder)
+        if new_fm != fm:
+            wiki_ontology.write_page(p, new_fm, body)
+            rel = p.relative_to(WIKI_DIR).as_posix()
+            applied.append(f"normalized vocab/title on {rel}")
+            applied.extend(f"  needs-review: {n}" for n in notes)
 
     return applied
 
@@ -222,7 +291,10 @@ def main(argv: list[str]) -> int:
     log_event({"stage": "wiki", "event": "lint", "pages": r["pages"],
                "orphans": len(r["orphans"]), "broken": len(r["broken"]),
                "missing_fm": len(r["missing_fm"]), "path_leaks": len(r["path_leaks"]),
-               "stale": len(r["stale"]), "fixes_applied": len(applied)})
+               "stale": len(r["stale"]), "vocab_violations": len(r["vocab_violations"]),
+               "unresolved_relations": len(r["unresolved_relations"]),
+               "baked_qualifier": len(r["baked_qualifier"]),
+               "duplicates": len(r["duplicates"]), "fixes_applied": len(applied)})
     # Non-zero exit if unresolved structural issues remain (path leaks always manual).
     unresolved = r["path_leaks"] or (r["broken"] and not args.fix)
     return 1 if unresolved else 0
