@@ -94,7 +94,7 @@ competes_with · authored_by · produces · governs · successor_of`
 
 ```yaml
 relations:
-  - client_of: "[[our-firm]]"          # this client is served by our firm
+  - client_of: "[[our-firm]]"     # this client is served by our firm
   - uses: "[[vera-model]]"
   - part_of: "[[acme-capital]]"
 ```
