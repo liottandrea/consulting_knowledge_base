@@ -9,10 +9,16 @@
 #   docker compose run --rm mcp-server qmd update && qmd embed  # (re)index the wiki
 #
 # MCP server is reachable at http://localhost:8765/mcp (streamable-http).
+# The MCP endpoint has no built-in authentication, so the host port below is
+# bound to loopback only by default. To expose it on the LAN/remotely instead,
+# drop the "127.0.0.1:" prefix from the port mapping — do this deliberately.
 
 services:
   mcp-server:
     build: .
+    env_file:
+      - path: .env                        # copy .env.example -> .env to override any default below
+        required: false
     environment:
       - MCP_TRANSPORT=streamable-http     # long-lived network transport (not stdio)
       - MCP_HOST=0.0.0.0
@@ -33,4 +39,4 @@ services:
       - ./hf-cache:/cache/huggingface     # persisted tokenizer weights
       - ./qmd-cache:/app/.qmd             # persisted qmd index + GGUF models
     ports:
-      - "8765:8000"                       # MCP at http://localhost:8765/mcp
+      - "127.0.0.1:8765:8000"             # MCP at http://localhost:8765/mcp (loopback-only)

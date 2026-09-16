@@ -1,0 +1,23 @@
+# Wiki Index
+
+> This file is **not** tracked in git — `wiki/index.md` is regenerated
+> automatically from page frontmatter after every ingest (see `CLAUDE.md` /
+> `AGENTS.md`, "Ingest workflow"). This `.example` file shows the format a
+> real `wiki/index.md` takes, with fictional entries.
+
+## Entities
+
+- [[acme-corp]] — Acme Corp (client) (company-capability)
+- [[acme-capital]] — Acme Capital (client) (company-capability)
+- [[globex-logistics]] — Globex Logistics (client) (retail-cpg)
+- [[jane-doe]] — Jane Doe (person) (company-capability)
+- [[acme-prism]] — Acme Prism (product) (ai-governance)
+
+## Concepts
+
+- [[demand-forecasting]] — Demand Forecasting (concept, domain: delivery)
+- [[ai-governance]] — AI Governance (concept, domain: governance)
+
+## Engagements
+
+- [[acme-corp-demand-forecasting-poc]] — Acme Corp Demand Forecasting POC (forecasting-demand)

@@ -190,7 +190,7 @@ Register with Claude Code:
 
 ```bash
 claude mcp add consult-kb -- \
-  uv --directory /Users/265090/Documents/repos/consult_kb run python mcp_server.py
+  uv --directory /path/to/consult_kb run python mcp_server.py
 ```
 
 Any MCP-compatible agent can use it. `CLAUDE.md` and `AGENTS.md` are both

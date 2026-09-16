@@ -1,0 +1,10 @@
+# Wiki Log
+
+> This file is **not** tracked in git — `wiki/log.md` is an append-only
+> record updated on every ingest (see `CLAUDE.md` / `AGENTS.md`, "Ingest
+> workflow"). This `.example` file shows the format a real `wiki/log.md`
+> takes, with fictional entries.
+
+2026-01-05T09:00:00Z | Ingested Acme Corp Q4 2025 Strategy Deck (OneDrive Main): integrated demand-forecasting roadmap into [[acme-corp-demand-forecasting-poc]], created entity pages for [[acme-corp]] and [[jane-doe]].
+2026-01-06T11:15:00Z | Ingested Acme Prism OnePager (Local): created [[acme-prism]], linked as `uses` relation from [[acme-corp-demand-forecasting-poc]].
+2026-01-07T14:30:00Z | Lint pass: no orphan pages found; 1 vocabulary violation fixed (tag `ml` renamed to `mlops`).

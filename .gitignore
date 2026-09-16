@@ -27,10 +27,11 @@ sources.json
 qmd-cache/
 
 # LLM-generated wiki content — gitignored by default (keep structure + stubs)
+# index.md/log.md are regenerated with real client data on every ingest —
+# never track them; see wiki/index.md.example and wiki/log.md.example instead.
 /wiki/*
-!/wiki/index.md
-!/wiki/log.md
 !/wiki/Home.md
+!/wiki/*.example
 !/wiki/sources/
 !/wiki/entities/
 !/wiki/concepts/
@@ -54,6 +55,14 @@ hf-cache/
 # Corporate CA certs (local only — never commit)
 certs/*.crt
 certs/*.pem
+
+# Environment files — never commit real secrets
+.env
+.env.*
+!.env.example
+
+# Unrelated local tooling artifact
+codebase-index/
 
 # macOS launcher app (local)
 Start Consulting KB.app/
